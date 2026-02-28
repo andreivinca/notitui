@@ -27,6 +27,7 @@ struct LogRecord {
     hhmm: Option<String>,
     app_name: Option<String>,
     summary: Option<String>,
+    body_source: Option<String>,
     body: Option<String>,
     close_reason_code: Option<u32>,
     close_reason: Option<String>,
@@ -43,6 +44,7 @@ impl LogRecord {
             hhmm: None,
             app_name: None,
             summary: None,
+            body_source: None,
             body: None,
             close_reason_code: None,
             close_reason: None,
@@ -66,6 +68,9 @@ impl LogRecord {
         }
         if other.summary.is_some() {
             self.summary = other.summary.clone();
+        }
+        if other.body_source.is_some() {
+            self.body_source = other.body_source.clone();
         }
         if other.body.is_some() {
             self.body = other.body.clone();
@@ -177,16 +182,13 @@ fn handle_mark_user(args: Vec<String>) -> Result<(), String> {
         ));
     }
 
-    let closed_epoch = now_epoch();
-    let closed_hhmm = now_hhmm().unwrap_or_else(|| String::from("--:--"));
-
     let payload = json!({
         "event_uid": current.event_uid.clone(),
         "id": current.id,
         "close_reason_code": 2,
         "close_reason": "dismissed-by-user",
-        "closed_epoch": closed_epoch,
-        "closed_hhmm": closed_hhmm,
+        "closed_epoch": current.closed_epoch,
+        "closed_hhmm": current.closed_hhmm.clone(),
     });
 
     append_payload(&path, &payload, max_notification_length)?;
@@ -451,6 +453,7 @@ fn process_block(
         let (epoch, hhmm) = timestamp_to_epoch_and_hhmm(&notify.timestamp).unwrap_or((None, None));
         let event_uid = make_event_uid(id, &notify.timestamp);
         active_events.insert(id, event_uid.clone());
+        let (body_source, body_text) = split_body_fields(&notify.body);
 
         let payload = json!({
             "event_uid": event_uid,
@@ -460,7 +463,8 @@ fn process_block(
             "bus_timestamp": notify.timestamp,
             "app_name": notify.app_name,
             "summary": notify.summary,
-            "body": notify.body,
+            "body_source": body_source,
+            "body": body_text,
         });
 
         append_payload(path, &payload, max_notification_length)?;
@@ -640,6 +644,7 @@ fn record_to_json(record: &LogRecord) -> Value {
         "hhmm": record.hhmm,
         "app_name": record.app_name,
         "summary": record.summary,
+        "body_source": record.body_source,
         "body": record.body,
         "close_reason_code": record.close_reason_code,
         "close_reason": record.close_reason,
@@ -693,9 +698,25 @@ fn quoted_value_after(line: &str, key: &str) -> Option<String> {
 
 fn extract_strings(block: &[String]) -> Vec<String> {
     let mut strings = Vec::new();
+    let mut multiline: Option<String> = None;
 
     for line in block {
         let trimmed = line.trim_start();
+
+        if let Some(mut current) = multiline.take() {
+            if !current.is_empty() {
+                current.push('\n');
+            }
+            if let Some(end) = find_closing_quote(trimmed) {
+                current.push_str(&trimmed[..end]);
+                strings.push(current);
+            } else {
+                current.push_str(trimmed);
+                multiline = Some(current);
+            }
+            continue;
+        }
+
         if !trimmed.starts_with("STRING ") {
             continue;
         }
@@ -704,13 +725,31 @@ fn extract_strings(block: &[String]) -> Vec<String> {
             continue;
         };
         let rest = &trimmed[start + 1..];
-        let Some(end) = rest.find('"') else {
-            continue;
-        };
-        strings.push(rest[..end].to_string());
+        if let Some(end) = find_closing_quote(rest) {
+            strings.push(rest[..end].to_string());
+        } else {
+            multiline = Some(rest.to_string());
+        }
     }
 
     strings
+}
+
+fn find_closing_quote(text: &str) -> Option<usize> {
+    let mut escaped = false;
+    for (index, ch) in text.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+
+        match ch {
+            '\\' => escaped = true,
+            '"' => return Some(index),
+            _ => {}
+        }
+    }
+    None
 }
 
 fn first_uint32(block: &[String]) -> Option<u32> {
@@ -835,7 +874,10 @@ fn value_to_record(value: &Value) -> Option<LogRecord> {
     let hhmm = opt_non_empty(value.get("hhmm"));
     let app_name = opt_non_empty(value.get("app_name"));
     let summary = opt_non_empty(value.get("summary"));
-    let body = opt_non_empty(value.get("body"));
+    let (body_source, body) = normalize_body_fields(
+        opt_non_empty(value.get("body_source")),
+        opt_non_empty(value.get("body")),
+    );
     let close_reason_code = value
         .get("close_reason_code")
         .and_then(Value::as_u64)
@@ -851,6 +893,7 @@ fn value_to_record(value: &Value) -> Option<LogRecord> {
         hhmm,
         app_name,
         summary,
+        body_source,
         body,
         close_reason_code,
         close_reason,
@@ -865,6 +908,39 @@ fn opt_non_empty(value: Option<&Value>) -> Option<String> {
         .map(str::trim)
         .filter(|text| !text.is_empty())
         .map(ToString::to_string)
+}
+
+fn normalize_body_fields(
+    body_source: Option<String>,
+    body: Option<String>,
+) -> (Option<String>, Option<String>) {
+    if body_source.is_some() {
+        return (body_source, body);
+    }
+
+    let Some(body_text) = body else {
+        return (None, None);
+    };
+
+    split_body_fields(&body_text)
+}
+
+fn split_body_fields(body_text: &str) -> (Option<String>, Option<String>) {
+    let normalized = body_text.replace("\r\n", "\n");
+    if let Some((source, content)) = normalized.split_once("\n\n") {
+        let source = source.trim();
+        let content = content.trim();
+        if !source.is_empty() && !content.is_empty() {
+            return (Some(source.to_string()), Some(content.to_string()));
+        }
+    }
+
+    let body = normalized.trim();
+    if body.is_empty() {
+        (None, None)
+    } else {
+        (None, Some(body.to_string()))
+    }
 }
 
 fn parse_single_string_flag(args: &[String], flag: &str) -> Result<String, String> {
@@ -895,10 +971,37 @@ fn now_epoch() -> i64 {
         .as_secs() as i64
 }
 
-fn now_hhmm() -> Option<String> {
-    let output = Command::new("date").arg("+%H:%M").output().ok()?;
-    if !output.status.success() {
-        return None;
+#[cfg(test)]
+mod tests {
+    use super::{extract_strings, split_body_fields};
+
+    #[test]
+    fn extract_strings_keeps_multiline_body_before_actions() {
+        let block = vec![
+            String::from("  MESSAGE \"susssasa{sv}i\" {"),
+            String::from("          STRING \"Chromium\";"),
+            String::from("          UINT32 0;"),
+            String::from("          STRING \"file:///tmp/logo.png\";"),
+            String::from("          STRING \"Pati\";"),
+            String::from("          STRING \"web.whatsapp.com"),
+            String::from(""),
+            String::from("hui\";"),
+            String::from("          ARRAY \"s\" {"),
+            String::from("                  STRING \"default\";"),
+            String::from("          };"),
+            String::from("  };"),
+        ];
+
+        let strings = extract_strings(&block);
+        assert_eq!(strings[0], "Chromium");
+        assert_eq!(strings[2], "Pati");
+        assert_eq!(strings[3], "web.whatsapp.com\n\nhui");
     }
-    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+
+    #[test]
+    fn split_body_fields_extracts_source_and_content() {
+        let (source, body) = split_body_fields("web.whatsapp.com\n\nTest");
+        assert_eq!(source.as_deref(), Some("web.whatsapp.com"));
+        assert_eq!(body.as_deref(), Some("Test"));
+    }
 }

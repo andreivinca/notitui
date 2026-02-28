@@ -2,9 +2,7 @@ use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Stdout, Write};
 use std::path::PathBuf;
-use std::process::Command;
 use std::time::{Duration, Instant};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton,
@@ -21,6 +19,7 @@ use serde_json::Value;
 mod app_config;
 
 const AUTO_REFRESH_EVERY: Duration = Duration::from_secs(2);
+const DETAIL_INDENT: &str = "       ";
 
 #[derive(Debug, Clone)]
 struct Notification {
@@ -30,6 +29,7 @@ struct Notification {
     is_undismissed: bool,
     time_hhmm: Option<String>,
     app_name: Option<String>,
+    body_source: Option<String>,
     body: Option<String>,
 }
 
@@ -41,6 +41,7 @@ struct LogRecord {
     hhmm: Option<String>,
     app_name: Option<String>,
     summary: Option<String>,
+    body_source: Option<String>,
     body: Option<String>,
     close_reason_code: Option<u32>,
     close_reason: Option<String>,
@@ -57,6 +58,7 @@ impl LogRecord {
             hhmm: None,
             app_name: None,
             summary: None,
+            body_source: None,
             body: None,
             close_reason_code: None,
             close_reason: None,
@@ -80,6 +82,9 @@ impl LogRecord {
         }
         if other.summary.is_some() {
             self.summary = other.summary.clone();
+        }
+        if other.body_source.is_some() {
+            self.body_source = other.body_source.clone();
         }
         if other.body.is_some() {
             self.body = other.body.clone();
@@ -108,6 +113,7 @@ impl Notification {
             is_undismissed: false,
             time_hhmm: None,
             app_name: None,
+            body_source: None,
             body: None,
         }
     }
@@ -386,6 +392,11 @@ fn list_inner_area(terminal_area: Rect) -> Rect {
 }
 
 fn notification_item_height(notification: &Notification) -> u16 {
+    let source_lines = notification
+        .body_source
+        .as_deref()
+        .map(|source| usize::from(!source.trim().is_empty()))
+        .unwrap_or(0);
     let body_lines = notification
         .body
         .as_deref()
@@ -397,7 +408,7 @@ fn notification_item_height(notification: &Notification) -> u16 {
         })
         .unwrap_or(0);
 
-    1 + u16::try_from(body_lines).unwrap_or(u16::MAX - 1)
+    1 + u16::try_from(source_lines + body_lines).unwrap_or(u16::MAX - 1)
 }
 
 fn render_ui(frame: &mut Frame, app: &App) {
@@ -428,9 +439,20 @@ fn render_ui(frame: &mut Frame, app: &App) {
             if !body.is_empty() {
                 for body_line in body.lines().map(str::trim).filter(|line| !line.is_empty()) {
                     lines.push(
-                        Line::from(truncate(body_line, 120)).style(Style::new().fg(Color::White)),
+                        Line::from(format!("{DETAIL_INDENT}{}", truncate(body_line, 112)))
+                            .style(Style::new().fg(summary_color)),
                     );
                 }
+            }
+        }
+
+        if let Some(source) = &notification.body_source {
+            let source = source.trim();
+            if !source.is_empty() {
+                lines.push(
+                    Line::from(format!("{DETAIL_INDENT}{}", truncate(source, 112)))
+                        .style(Style::new()),
+                );
             }
         }
         items.push(ListItem::new(lines));
@@ -523,8 +545,8 @@ fn mark_notification_user_dismissed(event_uid: &str) -> Result<String, String> {
         "id": current.id,
         "close_reason_code": 2,
         "close_reason": "dismissed-by-user",
-        "closed_epoch": now_epoch(),
-        "closed_hhmm": now_hhmm().unwrap_or_else(|| String::from("--:--")),
+        "closed_epoch": current.closed_epoch,
+        "closed_hhmm": current.closed_hhmm.clone(),
     });
     append_log_payload(&path, &payload)?;
     Ok(String::from(
@@ -556,6 +578,10 @@ fn read_log_records(path: &PathBuf) -> Result<Vec<LogRecord>, String> {
 
 fn parse_log_record(value: &Value) -> Option<LogRecord> {
     let id = json_u32(value.get("id"))?;
+    let (body_source, body) = normalize_body_fields(
+        json_string(value.get("body_source")),
+        json_string(value.get("body")),
+    );
     Some(LogRecord {
         event_uid: json_string(value.get("event_uid")),
         id,
@@ -563,7 +589,8 @@ fn parse_log_record(value: &Value) -> Option<LogRecord> {
         hhmm: json_string(value.get("hhmm")),
         app_name: json_string(value.get("app_name")),
         summary: json_string(value.get("summary")),
-        body: json_string(value.get("body")),
+        body_source,
+        body,
         close_reason_code: json_u32(value.get("close_reason_code")),
         close_reason: json_string(value.get("close_reason")),
         closed_epoch: json_i64(value.get("closed_epoch")),
@@ -593,6 +620,39 @@ fn json_i64(value: Option<&Value>) -> Option<i64> {
         return Some(number);
     }
     value.as_str()?.parse::<i64>().ok()
+}
+
+fn normalize_body_fields(
+    body_source: Option<String>,
+    body: Option<String>,
+) -> (Option<String>, Option<String>) {
+    if body_source.is_some() {
+        return (body_source, body);
+    }
+
+    let Some(body_text) = body else {
+        return (None, None);
+    };
+
+    split_body_fields(&body_text)
+}
+
+fn split_body_fields(body_text: &str) -> (Option<String>, Option<String>) {
+    let normalized = body_text.replace("\r\n", "\n");
+    if let Some((source, content)) = normalized.split_once("\n\n") {
+        let source = source.trim();
+        let content = content.trim();
+        if !source.is_empty() && !content.is_empty() {
+            return (Some(source.to_string()), Some(content.to_string()));
+        }
+    }
+
+    let body = normalized.trim();
+    if body.is_empty() {
+        (None, None)
+    } else {
+        (None, Some(body.to_string()))
+    }
 }
 
 fn aggregate_log_records(records: &[LogRecord]) -> Vec<LogRecord> {
@@ -656,6 +716,7 @@ fn notifications_from_log_records(records: &[LogRecord], filter: FilterMode) -> 
             notification.is_undismissed = is_auto_dismissed;
             notification.time_hhmm = record.hhmm.clone().or_else(|| record.closed_hhmm.clone());
             notification.app_name = record.app_name.clone();
+            notification.body_source = record.body_source.clone();
             notification.body = record.body.clone();
             Some(notification)
         })
@@ -663,7 +724,7 @@ fn notifications_from_log_records(records: &[LogRecord], filter: FilterMode) -> 
 }
 
 fn log_record_epoch(record: &LogRecord) -> Option<i64> {
-    record.closed_epoch.or(record.epoch)
+    record.epoch.or(record.closed_epoch)
 }
 
 fn append_log_payload(path: &PathBuf, payload: &Value) -> Result<(), String> {
@@ -677,19 +738,4 @@ fn append_log_payload(path: &PathBuf, payload: &Value) -> Result<(), String> {
     writeln!(file).map_err(|error| format!("failed to append newline: {error}"))?;
     file.flush()
         .map_err(|error| format!("failed to flush {}: {error}", path.display()))
-}
-
-fn now_epoch() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64
-}
-
-fn now_hhmm() -> Option<String> {
-    let output = Command::new("date").arg("+%H:%M").output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
