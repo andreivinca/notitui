@@ -4,6 +4,10 @@ Terminal notification history UI (`notitui`) and background logger (`notilog`) f
 
 This file only documents setup. Nothing is auto-configured.
 
+## Preview
+
+![notitui preview](assets/notitui-preview.png)
+
 ## Binaries
 
 - `notitui`: TUI app (reads configured log file, default `~/.local/state/notilog/log.jsonl`)
