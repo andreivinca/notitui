@@ -1,0 +1,169 @@
+# notitui + notilog
+
+Terminal notification history UI (`notitui`) and background logger (`notilog`) for Wayland notifications.
+
+This file only documents setup. Nothing is auto-configured.
+
+## Binaries
+
+- `notitui`: TUI app (reads configured log file, default `~/.local/state/notilog/log.jsonl`)
+- `notilog`: background logger (`logger run`) that writes the JSONL log
+
+## Config file
+
+Both apps use:
+
+- `~/.config/notitui/config.toml`
+
+If missing, it is created automatically with defaults:
+
+```toml
+log_file_path = "~/.local/state/notilog/log.jsonl"
+max_notification_length = 30
+```
+
+- `log_file_path`: JSONL log location used by both `notilog` and `notitui`
+- `max_notification_length`: how many latest notifications `notilog` keeps (older ones are pruned)
+
+## Build
+
+From project root:
+
+```bash
+cargo build --release --bins
+```
+
+Release binaries:
+
+- `target/release/notitui`
+- `target/release/notilog`
+
+## Install (recommended)
+
+Install to your user PATH:
+
+```bash
+mkdir -p ~/.local/bin
+cp target/release/notitui ~/.local/bin/notitui
+cp target/release/notilog ~/.local/bin/notilog
+chmod +x ~/.local/bin/notitui ~/.local/bin/notilog
+```
+
+Verify:
+
+```bash
+which notitui
+which notilog
+```
+
+## Run manually
+
+Terminal 1 (logger):
+
+```bash
+notilog logger run
+```
+
+Terminal 2 (UI):
+
+```bash
+notitui
+```
+
+## Start `notilog` at startup
+
+### Option 1: systemd user service (recommended)
+
+Create service file:
+
+```bash
+mkdir -p ~/.config/systemd/user
+cat > ~/.config/systemd/user/notilog.service <<'EOF'
+[Unit]
+Description=Notification logger for notitui
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/notilog logger run
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target
+EOF
+```
+
+Enable and start:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now notilog.service
+```
+
+Check status/logs:
+
+```bash
+systemctl --user status notilog.service
+journalctl --user -u notilog.service -f
+```
+
+### Option 2: Omarchy/Hyprland autostart (`exec-once`)
+
+In your setup, use:
+
+- `~/.config/hypr/autostart.conf`
+
+Add:
+
+```ini
+exec-once = ~/.local/bin/notilog logger run
+```
+
+Then restart your session (or reload Hyprland and verify process).
+
+### Option 3: Shell profile fallback
+
+Add to `~/.profile` or `~/.zprofile`:
+
+```bash
+pgrep -x notilog >/dev/null || nohup ~/.local/bin/notilog logger run >/tmp/notilog.log 2>&1 &
+```
+
+### Option 4: cron `@reboot` fallback
+
+Edit crontab:
+
+```bash
+crontab -e
+```
+
+Add:
+
+```cron
+@reboot /home/andrei/.local/bin/notilog logger run >> /tmp/notilog.log 2>&1
+```
+
+## Waybar: open `notitui` from icon
+
+Example module in `~/.config/waybar/config.jsonc`:
+
+```jsonc
+"custom/notitui": {
+  "format": "",
+  "tooltip-format": "Notifications",
+  "on-click": "setsid uwsm-app -- xdg-terminal-exec --app-id=org.omarchy.terminal --title=Omarchy -e bash -lc '~/.local/bin/notitui'"
+}
+```
+
+Reload Waybar:
+
+```bash
+pkill -USR2 waybar
+```
+
+## Notes
+
+- `notitui` starts in `missed` mode and toggles with `F`.
+- `d` in `notitui` marks selected auto-dismissed notification as user-dismissed in the log.
+- If the logger is not running, the UI will only show existing log data.
