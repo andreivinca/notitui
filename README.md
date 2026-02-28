@@ -40,13 +40,11 @@ Release binaries:
 
 ## Install (recommended)
 
-Install to your user PATH:
+Install to `/usr/local/bin`:
 
 ```bash
-mkdir -p ~/.local/bin
-cp target/release/notitui ~/.local/bin/notitui
-cp target/release/notilog ~/.local/bin/notilog
-chmod +x ~/.local/bin/notitui ~/.local/bin/notilog
+sudo install -Dm755 target/release/notitui /usr/local/bin/notitui
+sudo install -Dm755 target/release/notilog /usr/local/bin/notilog
 ```
 
 Verify:
@@ -85,7 +83,7 @@ After=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/notilog logger run
+ExecStart=notilog logger run
 Restart=always
 RestartSec=2
 
@@ -117,7 +115,7 @@ In your setup, use:
 Add:
 
 ```ini
-exec-once = ~/.local/bin/notilog logger run
+exec-once = notilog logger run
 ```
 
 Then restart your session (or reload Hyprland and verify process).
@@ -127,7 +125,7 @@ Then restart your session (or reload Hyprland and verify process).
 Add to `~/.profile` or `~/.zprofile`:
 
 ```bash
-pgrep -x notilog >/dev/null || nohup ~/.local/bin/notilog logger run >/tmp/notilog.log 2>&1 &
+pgrep -x notilog >/dev/null || nohup notilog logger run >/tmp/notilog.log 2>&1 &
 ```
 
 ### Option 4: cron `@reboot` fallback
@@ -141,7 +139,7 @@ crontab -e
 Add:
 
 ```cron
-@reboot /home/andrei/.local/bin/notilog logger run >> /tmp/notilog.log 2>&1
+@reboot notilog logger run >> /tmp/notilog.log 2>&1
 ```
 
 ## Waybar: open `notitui` from icon
@@ -152,7 +150,7 @@ Example module in `~/.config/waybar/config.jsonc`:
 "custom/notitui": {
   "format": "",
   "tooltip-format": "Notifications",
-  "on-click": "setsid uwsm-app -- xdg-terminal-exec --app-id=org.omarchy.terminal --title=Omarchy -e bash -lc '~/.local/bin/notitui'"
+  "on-click": "setsid uwsm-app -- xdg-terminal-exec --app-id=org.omarchy.terminal --title=Omarchy -e bash -lc 'notitui'"
 }
 ```
 
