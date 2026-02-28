@@ -515,7 +515,7 @@ fn render_ui(frame: &mut Frame, app: &App) {
     frame.render_stateful_widget(list, chunks[0], &mut state);
 
     let legend = Paragraph::new(
-        "F Show History/Missed | d Mark User Dismissed | y Copy Body | r Refresh | q Quit\nk,Up Up | j,Down Down | g Top | G Bottom | mouse click Select",
+        "f Show History/Missed | d Mark User Dismissed | y Copy Body | r Refresh | q Quit\nk,Up Up | j,Down Down | g Top | G Bottom",
     )
     .alignment(Alignment::Center)
     .style(Style::new().fg(Color::Cyan))
