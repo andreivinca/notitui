@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Stdout, Write};
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{
@@ -259,6 +261,33 @@ impl App {
             }
         }
     }
+
+    fn copy_selected_body_to_clipboard(&mut self) {
+        let Some(notification) = self.selected_notification() else {
+            self.status = String::from("Nothing selected");
+            return;
+        };
+
+        let Some(body) = notification
+            .body
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(ToString::to_string)
+        else {
+            self.status = String::from("Selected notification has no body");
+            return;
+        };
+
+        match copy_text_to_clipboard(&body) {
+            Ok(backend) => {
+                self.status = format!("Copied body to clipboard via {backend}");
+            }
+            Err(error) => {
+                self.status = format!("Failed to copy body: {error}");
+            }
+        }
+    }
 }
 
 fn main() -> io::Result<()> {
@@ -311,6 +340,7 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> 
                         KeyCode::Char('G') => app.select_last(),
                         KeyCode::Char('f') | KeyCode::Char('F') => app.toggle_filter(),
                         KeyCode::Char('d') => app.mark_selected_as_user_dismissed(),
+                        KeyCode::Char('y') => app.copy_selected_body_to_clipboard(),
                         KeyCode::Char('r') => app.refresh(),
                         KeyCode::Enter => app.invoke_selected(),
                         _ => {}
@@ -485,7 +515,7 @@ fn render_ui(frame: &mut Frame, app: &App) {
     frame.render_stateful_widget(list, chunks[0], &mut state);
 
     let legend = Paragraph::new(
-        "F Show History/Missed | d Mark User Dismissed | r Refresh | q Quit\nk,Up Up | j,Down Down | g Top | G Bottom | mouse click Select",
+        "F Show History/Missed | d Mark User Dismissed | y Copy Body | r Refresh | q Quit\nk,Up Up | j,Down Down | g Top | G Bottom | mouse click Select",
     )
     .alignment(Alignment::Center)
     .style(Style::new().fg(Color::Cyan))
@@ -738,4 +768,74 @@ fn append_log_payload(path: &PathBuf, payload: &Value) -> Result<(), String> {
     writeln!(file).map_err(|error| format!("failed to append newline: {error}"))?;
     file.flush()
         .map_err(|error| format!("failed to flush {}: {error}", path.display()))
+}
+
+fn copy_text_to_clipboard(text: &str) -> Result<&'static str, String> {
+    let mut last_error = String::from("no clipboard command available");
+
+    for (command, args) in [
+        ("wl-copy", Vec::<&str>::new()),
+        ("xclip", vec!["-selection", "clipboard"]),
+        ("xsel", vec!["--clipboard", "--input"]),
+    ] {
+        match run_clipboard_command(command, &args, text) {
+            Ok(()) => return Ok(command),
+            Err(error) => {
+                last_error = error;
+            }
+        }
+    }
+
+    Err(last_error)
+}
+
+fn run_clipboard_command(command: &str, args: &[&str], text: &str) -> Result<(), String> {
+    let mut child = match Command::new(command)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Err(format!("{command} not found"));
+        }
+        Err(error) => {
+            return Err(format!("could not start {command}: {error}"));
+        }
+    };
+
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin
+            .write_all(text.as_bytes())
+            .map_err(|error| format!("failed to write to {command}: {error}"))?;
+    } else {
+        return Err(format!("could not open stdin for {command}"));
+    }
+    child.stdin.take();
+
+    let deadline = Instant::now() + Duration::from_millis(300);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if status.success() {
+                    return Ok(());
+                }
+                return Err(format!("{command} exited with status {status}"));
+            }
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    thread::spawn(move || {
+                        let _ = child.wait();
+                    });
+                    return Ok(());
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => {
+                return Err(format!("failed while waiting for {command}: {error}"));
+            }
+        }
+    }
 }
