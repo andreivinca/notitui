@@ -32,6 +32,22 @@ max_notification_length = 30
 - `log_file_path`: JSONL log location used by both `notilog` and `notitui`
 - `max_notification_length`: how many latest notifications `notilog` keeps (older ones are pruned)
 
+## Download release binaries (no build)
+
+If you do not want to compile from source, download prebuilt binaries from:
+
+- `https://github.com/andreivinca/notitui/releases/latest`
+
+Example with `curl` (Linux x86_64):
+
+```bash
+curl -fL -o notitui "https://github.com/andreivinca/notitui/releases/download/v0.1.2/notitui-v0.1.2-linux-x86_64"
+curl -fL -o notilog "https://github.com/andreivinca/notitui/releases/download/v0.1.2/notilog-v0.1.2-linux-x86_64"
+chmod +x notitui notilog
+sudo install -Dm755 notitui /usr/local/bin/notitui
+sudo install -Dm755 notilog /usr/local/bin/notilog
+```
+
 ## Build
 
 From project root:
