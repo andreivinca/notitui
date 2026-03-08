@@ -11,9 +11,6 @@ This file only documents setup. Nothing is auto-configured.
 ## Binaries
 
 - `notitui`: TUI app (reads configured log file, default `~/.local/state/notilog/log.jsonl`)
-  - TUI mode: `notitui`
-  - status mode: `notitui --status` or `notitui status`
-  - JSON status mode (Waybar): `notitui --status --json`
 - `notilog`: background logger (`logger run`) that writes the JSONL log
 
 ## Config file
@@ -73,13 +70,6 @@ Terminal 2 (UI):
 
 ```bash
 notitui
-```
-
-Status output (for bars/scripts):
-
-```bash
-notitui --status
-notitui --status --json
 ```
 
 ## Omarchy keybinding: open `notitui` with `SUPER + N`
@@ -168,24 +158,15 @@ Add:
 @reboot notilog logger run >> /tmp/notilog.log 2>&1
 ```
 
-## Waybar: dynamic icon + open `notitui`
+## Waybar: open `notitui` from icon
 
 Example module in `~/.config/waybar/config.jsonc`:
 
 ```jsonc
 "custom/notitui": {
-  "return-type": "json",
-  "exec": "notitui --status --json",
-  "interval": 5,
-  "format": "{icon}",
-  "format-icons": {
-    "has-missed": "",
-    "empty": "",
-    "error": "",
-    "default": ""
-  },
-  "tooltip": true,
-    "on-click": "setsid uwsm-app -- xdg-terminal-exec --app-id=TUI.float -e notitui"
+  "format": "",
+  "tooltip-format": "Notifications",
+  "on-click": "setsid uwsm-app -- xdg-terminal-exec --app-id=org.omarchy.terminal --title=Omarchy -e bash -lc 'notitui'"
 }
 ```
 
