@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::env;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Stdout, Write};
 use std::path::PathBuf;
@@ -22,6 +23,9 @@ mod app_config;
 
 const AUTO_REFRESH_EVERY: Duration = Duration::from_secs(2);
 const DETAIL_INDENT: &str = "       ";
+const STATUS_ICON_MISSED: &str = "";
+const STATUS_ICON_EMPTY: &str = "";
+const STATUS_ICON_ERROR: &str = "";
 
 #[derive(Debug, Clone)]
 struct Notification {
@@ -139,6 +143,56 @@ impl FilterMode {
         match self {
             Self::All => Self::AutoDismissed,
             Self::AutoDismissed => Self::All,
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+enum CliMode {
+    Tui,
+    Status { json: bool },
+    Help,
+}
+
+#[derive(Debug, Clone)]
+struct StatusSnapshot {
+    missed_count: usize,
+    history_count: usize,
+}
+
+impl StatusSnapshot {
+    fn icon(&self) -> &'static str {
+        if self.missed_count > 0 {
+            STATUS_ICON_MISSED
+        } else {
+            STATUS_ICON_EMPTY
+        }
+    }
+
+    fn class(&self) -> &'static str {
+        if self.missed_count > 0 {
+            "has-missed"
+        } else {
+            "empty"
+        }
+    }
+
+    fn text(&self) -> String {
+        if self.missed_count > 0 {
+            format!("{} {}", self.icon(), self.missed_count)
+        } else {
+            self.icon().to_string()
+        }
+    }
+
+    fn tooltip(&self) -> String {
+        if self.missed_count > 0 {
+            format!(
+                "Missed notifications: {} | History: {}",
+                self.missed_count, self.history_count
+            )
+        } else {
+            format!("No missed notifications | History: {}", self.history_count)
         }
     }
 }
@@ -291,12 +345,145 @@ impl App {
 }
 
 fn main() -> io::Result<()> {
+    match parse_cli_mode() {
+        Ok(CliMode::Tui) => run_tui(),
+        Ok(CliMode::Status { json }) => {
+            print_status(json);
+            Ok(())
+        }
+        Ok(CliMode::Help) => {
+            print_help();
+            Ok(())
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            eprintln!();
+            print_help();
+            std::process::exit(2);
+        }
+    }
+}
+
+fn run_tui() -> io::Result<()> {
     let mut terminal = setup_terminal()?;
     let mut app = App::new();
     let run_result = run_app(&mut terminal, &mut app);
     let restore_result = restore_terminal(&mut terminal);
     run_result?;
     restore_result
+}
+
+fn parse_cli_mode() -> Result<CliMode, String> {
+    let mut args = env::args().skip(1);
+    let Some(command) = args.next() else {
+        return Ok(CliMode::Tui);
+    };
+
+    match command.as_str() {
+        "-h" | "--help" => {
+            if args.next().is_some() {
+                Err(String::from("help does not accept extra arguments"))
+            } else {
+                Ok(CliMode::Help)
+            }
+        }
+        "status" | "--status" | "-status" => parse_status_mode(args.collect()),
+        unknown => Err(format!("unknown argument: {unknown}")),
+    }
+}
+
+fn parse_status_mode(args: Vec<String>) -> Result<CliMode, String> {
+    let mut json = false;
+
+    for argument in args {
+        match argument.as_str() {
+            "--json" => json = true,
+            "-h" | "--help" => return Ok(CliMode::Help),
+            unknown => return Err(format!("unknown status argument: {unknown}")),
+        }
+    }
+
+    Ok(CliMode::Status { json })
+}
+
+fn print_help() {
+    println!("notitui - notification history TUI");
+    println!();
+    println!("Usage:");
+    println!("  notitui");
+    println!("  notitui --status [--json]");
+    println!("  notitui status [--json]");
+    println!();
+    println!("Options:");
+    println!("  -h, --help       Show this help");
+    println!("  --status         Print status for bars/scripts and exit");
+    println!("  --json           Print status as JSON (for Waybar return-type=json)");
+}
+
+fn print_status(json: bool) {
+    match fetch_status_snapshot() {
+        Ok(snapshot) => {
+            if json {
+                print_status_json(
+                    &snapshot.text(),
+                    snapshot.class(),
+                    &snapshot.tooltip(),
+                    snapshot.missed_count,
+                    snapshot.history_count,
+                );
+            } else {
+                println!("{}", snapshot.text());
+            }
+        }
+        Err(error) => {
+            eprintln!("Failed to read notification status: {error}");
+            if json {
+                print_status_json(
+                    STATUS_ICON_ERROR,
+                    "error",
+                    &format!("notitui status error: {error}"),
+                    0,
+                    0,
+                );
+            } else {
+                println!("{STATUS_ICON_ERROR}");
+            }
+        }
+    }
+}
+
+fn print_status_json(text: &str, class: &str, tooltip: &str, missed: usize, history: usize) {
+    let payload = serde_json::json!({
+        "text": text,
+        "alt": class,
+        "class": class,
+        "tooltip": tooltip,
+        "missed": missed,
+        "history": history,
+    });
+
+    match serde_json::to_string(&payload) {
+        Ok(encoded) => println!("{encoded}"),
+        Err(error) => {
+            eprintln!("Failed to encode status JSON: {error}");
+            println!(
+                r#"{{"text":"{}","alt":"error","class":"error"}}"#,
+                STATUS_ICON_ERROR
+            );
+        }
+    }
+}
+
+fn fetch_status_snapshot() -> Result<StatusSnapshot, String> {
+    let notifications = fetch_notifications(FilterMode::All)?;
+    let missed_count = notifications
+        .iter()
+        .filter(|notification| notification.is_undismissed)
+        .count();
+    Ok(StatusSnapshot {
+        missed_count,
+        history_count: notifications.len(),
+    })
 }
 
 fn setup_terminal() -> io::Result<Terminal<CrosstermBackend<Stdout>>> {
