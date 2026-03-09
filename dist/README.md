@@ -24,10 +24,12 @@ If missing, it is created automatically with defaults:
 ```toml
 log_file_path = "~/.local/state/notilog/log.jsonl"
 max_notification_length = 30
+refresh_signal = 8
 ```
 
 - `log_file_path`: JSONL log location used by both `notilog` and `notitui`
 - `max_notification_length`: how many latest notifications `notilog` keeps (older ones are pruned)
+- `refresh_signal`: refresh signal channel (`RTMIN+N`) used for external status bars/listeners (default `8`)
 
 ## Download release binaries (no build)
 

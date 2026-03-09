@@ -737,10 +737,38 @@ fn notification_log_path() -> Option<PathBuf> {
     Some(app_config::load_or_create().log_file_path)
 }
 
+fn refresh_signal_channel() -> u8 {
+    app_config::load_or_create().refresh_signal
+}
+
+fn trigger_refresh_signal(signal_channel: u8) -> Result<(), String> {
+    let signal = format!("-RTMIN+{signal_channel}");
+    let status = Command::new("pkill")
+        .args([signal.as_str(), "waybar"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|error| format!("could not execute pkill: {error}"))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("pkill exited with status {status}"))
+    }
+}
+
+fn is_auto_dismissed_record(record: &LogRecord) -> bool {
+    record.close_reason_code == Some(1) || record.close_reason.as_deref() == Some("expired")
+}
+
 fn mark_notification_user_dismissed(event_uid: &str) -> Result<String, String> {
     let path = notification_log_path().ok_or_else(|| String::from("could not resolve log path"))?;
     let records = read_log_records(&path)?;
     let merged = aggregate_log_records(&records);
+    let missed_before = merged
+        .iter()
+        .filter(|record| is_auto_dismissed_record(record))
+        .count();
 
     let Some(current) = merged
         .iter()
@@ -749,8 +777,7 @@ fn mark_notification_user_dismissed(event_uid: &str) -> Result<String, String> {
         return Err(String::from("target notification not found in log"));
     };
 
-    let is_auto_dismissed =
-        current.close_reason_code == Some(1) || current.close_reason.as_deref() == Some("expired");
+    let is_auto_dismissed = is_auto_dismissed_record(current);
     if !is_auto_dismissed {
         return Err(String::from(
             "selected notification is not currently auto-dismissed",
@@ -766,6 +793,11 @@ fn mark_notification_user_dismissed(event_uid: &str) -> Result<String, String> {
         "closed_hhmm": current.closed_hhmm.clone(),
     });
     append_log_payload(&path, &payload)?;
+    if missed_before == 1 {
+        if let Err(error) = trigger_refresh_signal(refresh_signal_channel()) {
+            eprintln!("warning: failed to trigger refresh signal: {error}");
+        }
+    }
     Ok(String::from(
         "Marked selected notification as dismissed-by-user",
     ))

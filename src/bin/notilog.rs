@@ -346,6 +346,7 @@ fn handle_prune(args: Vec<String>) -> Result<(), String> {
 fn run_logger() -> Result<(), String> {
     let path = log_path()?;
     let max_notification_length = max_notification_length();
+    let refresh_signal = refresh_signal_channel();
 
     let mut child = Command::new("busctl")
         .args(["--user", "monitor", "org.freedesktop.Notifications"])
@@ -374,6 +375,7 @@ fn run_logger() -> Result<(), String> {
                 &mut active_events,
                 &path,
                 max_notification_length,
+                refresh_signal,
             )?;
             block.clear();
         }
@@ -389,6 +391,7 @@ fn run_logger() -> Result<(), String> {
         &mut active_events,
         &path,
         max_notification_length,
+        refresh_signal,
     )?;
 
     let status = child
@@ -407,6 +410,7 @@ fn process_block(
     active_events: &mut HashMap<u32, String>,
     path: &PathBuf,
     max_notification_length: usize,
+    refresh_signal: u8,
 ) -> Result<(), String> {
     if block.is_empty() {
         return Ok(());
@@ -468,6 +472,9 @@ fn process_block(
         });
 
         append_payload(path, &payload, max_notification_length)?;
+        if let Err(error) = trigger_refresh_signal(refresh_signal) {
+            eprintln!("warning: failed to trigger refresh signal: {error}");
+        }
         return Ok(());
     }
 
@@ -499,12 +506,19 @@ fn process_block(
         });
 
         append_payload(path, &payload, max_notification_length)?;
+        if let Err(error) = trigger_refresh_signal(refresh_signal) {
+            eprintln!("warning: failed to trigger refresh signal: {error}");
+        }
     }
 
     Ok(())
 }
 
-fn append_payload(path: &PathBuf, payload: &Value, max_notification_length: usize) -> Result<(), String> {
+fn append_payload(
+    path: &PathBuf,
+    payload: &Value,
+    max_notification_length: usize,
+) -> Result<(), String> {
     let mut log_file = OpenOptions::new()
         .create(true)
         .append(true)
@@ -521,7 +535,10 @@ fn append_payload(path: &PathBuf, payload: &Value, max_notification_length: usiz
     prune_to_max_notifications(path, max_notification_length)
 }
 
-fn prune_to_max_notifications(path: &PathBuf, max_notification_length: usize) -> Result<(), String> {
+fn prune_to_max_notifications(
+    path: &PathBuf,
+    max_notification_length: usize,
+) -> Result<(), String> {
     if max_notification_length == 0 {
         return Ok(());
     }
@@ -805,6 +822,26 @@ fn log_path() -> Result<PathBuf, String> {
 
 fn max_notification_length() -> usize {
     app_config::load_or_create().max_notification_length
+}
+
+fn refresh_signal_channel() -> u8 {
+    app_config::load_or_create().refresh_signal
+}
+
+fn trigger_refresh_signal(signal_channel: u8) -> Result<(), String> {
+    let signal = format!("-RTMIN+{signal_channel}");
+    let status = Command::new("pkill")
+        .args([signal.as_str(), "waybar"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|error| format!("could not execute pkill: {error}"))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("pkill exited with status {status}"))
+    }
 }
 
 fn record_event_key(record: &LogRecord, index: usize) -> String {

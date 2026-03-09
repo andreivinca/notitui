@@ -3,12 +3,15 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub const DEFAULT_MAX_NOTIFICATIONS: usize = 30;
+pub const DEFAULT_REFRESH_SIGNAL: u8 = 8;
+const MAX_REFRESH_SIGNAL: u8 = 30;
 const DEFAULT_LOG_PATH: &str = "~/.local/state/notilog/log.jsonl";
 
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     pub log_file_path: PathBuf,
     pub max_notification_length: usize,
+    pub refresh_signal: u8,
 }
 
 pub fn load_or_create() -> AppConfig {
@@ -18,6 +21,7 @@ pub fn load_or_create() -> AppConfig {
 
     let mut log_file_path = expand_path(DEFAULT_LOG_PATH, &home);
     let mut max_notification_length = DEFAULT_MAX_NOTIFICATIONS;
+    let mut refresh_signal = DEFAULT_REFRESH_SIGNAL;
 
     if let Ok(content) = fs::read_to_string(&config_path) {
         for line in content.lines() {
@@ -46,6 +50,16 @@ pub fn load_or_create() -> AppConfig {
                         }
                     }
                 }
+                "refresh_signal"
+                | "refresh_signal_channel"
+                | "waybar_signal"
+                | "waybar_signal_channel" => {
+                    if let Ok(parsed) = value.parse::<u8>() {
+                        if parsed <= MAX_REFRESH_SIGNAL {
+                            refresh_signal = parsed;
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -58,6 +72,7 @@ pub fn load_or_create() -> AppConfig {
     AppConfig {
         log_file_path,
         max_notification_length,
+        refresh_signal,
     }
 }
 
@@ -71,7 +86,7 @@ fn ensure_default_config_file(path: &Path) {
     }
 
     let default = format!(
-        "# notitui/notilog config\n# Notification log file path\nlog_file_path = \"{DEFAULT_LOG_PATH}\"\n\n# Maximum number of notifications to keep\nmax_notification_length = {DEFAULT_MAX_NOTIFICATIONS}\n"
+        "# notitui/notilog config\n# Notification log file path\nlog_file_path = \"{DEFAULT_LOG_PATH}\"\n\n# Maximum number of notifications to keep\nmax_notification_length = {DEFAULT_MAX_NOTIFICATIONS}\n\n# Refresh signal channel (RTMIN+N)\n# Valid range: 0..={MAX_REFRESH_SIGNAL}\nrefresh_signal = {DEFAULT_REFRESH_SIGNAL}\n"
     );
     let _ = fs::write(path, default);
 }
