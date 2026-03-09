@@ -176,16 +176,33 @@ Add:
 @reboot notilog logger run >> /tmp/notilog.log 2>&1
 ```
 
-## Waybar: open `notitui` from icon
+## Waybar: dynamic icon + open `notitui`
 
 Example module in `~/.config/waybar/config.jsonc`:
 
 ```jsonc
 "custom/notitui": {
-  "format": "",
-  "tooltip-format": "Notifications",
-  "on-click": "setsid uwsm-app -- xdg-terminal-exec --app-id=org.omarchy.terminal --title=Omarchy -e bash -lc 'notitui'"
+  "return-type": "json",
+  "exec": "notitui --status --json",
+  "interval": 5,
+  "signal": 8,
+  "format": "{icon}",
+  "format-icons": {
+    "has-missed": "",
+    "empty": "",
+    "error": "",
+    "default": ""
+  },
+  "tooltip": true,
+  "on-click": "setsid uwsm-app -- xdg-terminal-exec --app-id=TUI.float -e notitui"
 }
+```
+
+`signal` should match `refresh_signal` from `~/.config/notitui/config.toml`.
+You can trigger an on-demand refresh with:
+
+```bash
+pkill -RTMIN+8 waybar
 ```
 
 Reload Waybar:

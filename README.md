@@ -195,6 +195,7 @@ Example module in `~/.config/waybar/config.jsonc`:
   "return-type": "json",
   "exec": "notitui --status --json",
   "interval": 5,
+  "signal": 8,
   "format": "{icon}",
   "format-icons": {
     "has-missed": "",
@@ -203,8 +204,15 @@ Example module in `~/.config/waybar/config.jsonc`:
     "default": ""
   },
   "tooltip": true,
-    "on-click": "setsid uwsm-app -- xdg-terminal-exec --app-id=TUI.float -e notitui"
+  "on-click": "setsid uwsm-app -- xdg-terminal-exec --app-id=TUI.float -e notitui"
 }
+```
+
+`signal` should match `refresh_signal` from `~/.config/notitui/config.toml`.
+You can trigger an on-demand refresh with:
+
+```bash
+pkill -RTMIN+8 waybar
 ```
 
 Reload Waybar:
