@@ -43,8 +43,8 @@ If you do not want to compile from source, download prebuilt binaries from:
 Example with `curl` (Linux x86_64):
 
 ```bash
-curl -fL -o notitui "https://github.com/andreivinca/notitui/releases/download/v0.1.2/notitui-v0.1.2-linux-x86_64"
-curl -fL -o notilog "https://github.com/andreivinca/notitui/releases/download/v0.1.2/notilog-v0.1.2-linux-x86_64"
+curl -fL -o notitui "https://github.com/andreivinca/notitui/releases/download/v0.1.3/notitui-v0.1.3-linux-x86_64"
+curl -fL -o notilog "https://github.com/andreivinca/notitui/releases/download/v0.1.3/notilog-v0.1.3-linux-x86_64"
 chmod +x notitui notilog
 sudo install -Dm755 notitui /usr/local/bin/notitui
 sudo install -Dm755 notilog /usr/local/bin/notilog
